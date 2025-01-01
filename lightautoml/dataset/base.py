@@ -366,6 +366,19 @@ class LAMLDataset:
 
     # static methods - how to make 1d slice, 2s slice, concat of feature matrix etc ...
     @staticmethod
+    def _vstack(datasets: Sequence[Any]) -> Any:
+        """Abstract method - define horizontal stack of feature arrays.
+
+        Args:
+            datasets: Sequence of feature arrays.
+
+        Returns:  # noqa DAR202
+            Single feature array.
+
+        """
+        raise NotImplementedError("Horizontal Stack not implemented.")
+    
+    @staticmethod
     def _hstack(datasets: Sequence[Any]) -> Any:
         """Abstract method - define horizontal stack of feature arrays.
 
@@ -472,7 +485,42 @@ class LAMLDataset:
         dataset.set_data(data, features, roles)
 
         return dataset
+    @classmethod
+    def vconcat(cls, datasets: Sequence["LAMLDataset"]) -> "LAMLDataset":
+        """Concat multiple dataset.
 
+        Default behavior - takes empty dataset from datasets[0]
+        and concat all features from others.
+
+        Args:
+            datasets: Sequence of datasets.
+
+        Returns:
+            Concated dataset.
+
+        """
+        for check in cls._concat_checks:
+            check(datasets)
+
+        dataset = datasets[0].empty()
+        data = []
+        features = [*datasets[0].features]
+        roles = {**datasets[0].roles}
+        atrs = set(dataset._array_like_attrs)
+
+        for ds in datasets:
+            data.append(ds.data)
+            for atr in ds._array_like_attrs:
+                if atr not in atrs:
+                    dataset._array_like_attrs.append(atr)
+                    dataset.__dict__[atr] = ds.__dict__[atr]
+                    atrs.update({atr})
+
+        data = cls._vstack(data)
+        dataset.set_data(data, features, roles)
+    
+        return dataset
+    
     def drop_features(self, droplist: Sequence[str]):
         """Inplace drop columns from dataset.
 

@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 from ..tasks.base import Task
 
-
+from .utils import _dtypes_mapping
 logger = logging.getLogger(__name__)
 
 
@@ -31,6 +31,7 @@ class UniversalDataset:
 
     def __init__(
         self,
+        fold: int,
         data: Dict[str, np.ndarray],
         y: np.ndarray,
         w: Optional[np.ndarray] = None,
@@ -38,6 +39,7 @@ class UniversalDataset:
         max_length: int = 256,
         stage: str = "test",
     ):
+        self.fold = fold
         self.data = data
         self.y = y
         self.w = w
@@ -49,7 +51,7 @@ class UniversalDataset:
         return len(self.y)
 
     def __getitem__(self, index: int) -> Dict[str, np.ndarray]:
-        res = {"label": self.y[index]}
+        res = {"fold":self.fold ,"label": self.y[index]}
         res.update({key: value[index] for key, value in self.data.items() if key != "text"})
         if (self.tokenizer is not None) and ("text" in self.data):
             sent = self.data["text"][index, 0]  # only one column
@@ -85,7 +87,7 @@ class Clump(nn.Module):
         """Forward-pass."""
         x = torch.clamp(x, self.min_v, self.max_v)
         return x
-
+    
 
 class TorchUniversalModel(nn.Module):
     """Mixed data model.
@@ -133,6 +135,7 @@ class TorchUniversalModel(nn.Module):
         self.cont_embedder = None
         self.cat_embedder = None
         self.text_embedder = None
+        self.sampler = None
 
         n_in = 0
         if cont_embedder_ is not None:
@@ -212,9 +215,12 @@ class TorchUniversalModel(nn.Module):
         except:
             logger.info3("Last linear layer not founded, so init_bias=False")
 
-    def get_logits(self, inp: Dict[str, torch.Tensor]) -> torch.Tensor:
+
+    def get_logits(self, inp: Dict[str, torch.Tensor],efficient_bs:int = None) -> torch.Tensor:
         """Forward-pass of model with embeddings."""
         outputs = []
+        
+            
         if self.cont_embedder is not None:
             outputs.append(self.cont_embedder(inp))
 
@@ -228,8 +234,10 @@ class TorchUniversalModel(nn.Module):
             output = torch.cat(outputs, dim=1)
         else:
             output = outputs[0]
-
-        logits = self.torch_model(output)
+        if efficient_bs is not None:
+            logits = self.torch_model(output,efficient_bs)
+        else:
+            logits = self.torch_model(output)
         return logits
 
     def get_preds_from_logits(self, logits: torch.Tensor) -> torch.Tensor:
@@ -246,7 +254,16 @@ class TorchUniversalModel(nn.Module):
 
     def forward(self, inp: Dict[str, torch.Tensor]) -> torch.Tensor:
         """Forward-pass with output loss."""
-        x = self.get_logits(inp)
+        efficient_bs = None
+        if inp['sampler'] is not None:
+            efficient_bs = len(inp['label'])
+            candidate_sample = next(inp['sampler'])
+            inp = {
+                    i: torch.cat([inp[i],
+                    (candidate_sample[i].long().to(self.torch_model.device) if _dtypes_mapping[i] == "long" else candidate_sample[i].to(self.torch_model.device))])
+                    for i in set(inp.keys())-set(['sampler'])
+                }
+        x = self.get_logits(inp,efficient_bs)
         if not self.loss_on_logits:
             x = self.get_preds_from_logits(x)
 
@@ -255,6 +272,15 @@ class TorchUniversalModel(nn.Module):
 
     def predict(self, inp: Dict[str, torch.Tensor]) -> torch.Tensor:
         """Prediction."""
-        x = self.get_logits(inp)
+        efficient_bs = None
+        if inp['sampler'] is not None:
+            efficient_bs = len(inp['label'])
+            candidate_sample = next(inp['sampler'])
+            inp = {
+                    i: torch.cat([inp[i],
+                    (candidate_sample[i].long().to(self.torch_model.device) if _dtypes_mapping[i] == "long" else candidate_sample[i].to(self.torch_model.device))])
+                    for i in set(inp.keys())-set(['sampler'])
+                }
+        x = self.get_logits(inp,efficient_bs)
         x = self.get_preds_from_logits(x)
         return x

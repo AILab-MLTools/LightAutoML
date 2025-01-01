@@ -23,6 +23,7 @@ _dtypes_mapping = {
     "token_type_ids": "long",
     "text": "float",  # embeddings
     "length": "long",
+    "fold": "long"
 }
 
 
@@ -66,7 +67,7 @@ def is_shuffle(stage: str) -> bool:
         Bool value.
 
     """
-    is_sh = {"train": True, "val": False, "test": False}
+    is_sh = {"train": True, "val": False, "test": False, "sampler": True}
     return is_sh[stage]
 
 

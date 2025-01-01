@@ -705,3 +705,72 @@ class SoftEmbeddingFlat(SoftEmbedding):
 
     def __init__(self, *args, **kwargs):
         super(SoftEmbeddingFlat, self).__init__(*args, **{**kwargs, **{"flatten_output": True}})
+
+
+class MLPContEmbedding(nn.Module):
+    """MLP multi-dim embedding.
+
+    Args:
+        num_dims : num of features.
+        d_in: input size.
+        d_out: output size.
+        d_hidden: hidden size.
+    """
+
+    def __init__(
+        self,
+        num_dims: int,
+        embedding_size: int = 10,
+        d_hidden: int = 64,
+        flatten_output: bool = False,
+        **kwargs,
+    ) -> None:
+        super().__init__()
+        self.flatten_output = flatten_output
+        self.embedding_size = embedding_size
+        self.num_dims = num_dims
+        self.layers = nn.ModuleList(
+            [
+                nn.Sequential(nn.Linear(1, d_hidden), nn.ReLU(), nn.Linear(d_hidden, embedding_size))
+                for _ in range(num_dims)
+            ]
+        )
+
+    def get_out_shape(self) -> int:
+        """Output shape.
+
+        Returns:
+            int with module output shape.
+
+        """
+        if self.flatten_output:
+            return self.num_dims * self.embedding_size
+        else:
+            return self.num_dims
+
+    def forward(self, X: Dict) -> Tensor:
+        """Produce embedding for each value in input.
+
+        Args:
+            X : Dict
+
+        Returns:
+            torch.Tensor
+
+        """
+        x = X["cont"]
+        # ans = []
+        # for i, l in enumerate(self.layers):
+        #     temp = x[:,i].view(x.size(0),-1)
+        #     temp = l(temp)
+        # x = torch.stack(ans,1)
+        x = torch.stack([l(x[:, i].view(-1,1)) for i, l in enumerate(self.layers)], 1)
+        if self.flatten_output:
+            return x.view(x.shape[0], -1)
+        return x
+
+class MLPContEmbeddingFlat(MLPContEmbedding):
+    """Flatten version of BasicCatEmbedding."""
+
+    def __init__(self, *args, **kwargs):
+        super(MLPContEmbeddingFlat, self).__init__(*args, **{**kwargs, **{"flatten_output": True}})

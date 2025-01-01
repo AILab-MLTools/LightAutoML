@@ -212,6 +212,18 @@ class NumpyDataset(LAMLDataset):
 
         """
         return np.hstack(datasets)
+    @staticmethod
+    def _vstack(datasets: Sequence[np.ndarray]) -> np.ndarray:
+        """Concatenate function for numpy arrays.
+
+        Args:
+            datasets: Sequence of np.ndarray.
+
+        Returns:
+            Stacked features array.
+
+        """
+        return np.vstack(datasets)
 
     @staticmethod
     def _get_rows(data: np.ndarray, k: IntIdx) -> np.ndarray:
@@ -400,6 +412,17 @@ class CSRSparseDataset(NumpyDataset):
 
         """
         return sparse.hstack(datasets, format="csr")
+    def _vstack(datasets: Sequence[Union[sparse.csr_matrix, np.ndarray]]) -> sparse.csr_matrix:
+        """Concatenate function for sparse and numpy arrays.
+
+        Args:
+            datasets: Sequence of csr_matrix or np.ndarray.
+
+        Returns:
+            Sparse matrix.
+
+        """
+        return sparse.vstack(datasets, format="csr")
 
     def __init__(
         self,
@@ -609,6 +632,19 @@ class PandasDataset(LAMLDataset):
 
         """
         return pd.concat(datasets, axis=1)
+    
+    @staticmethod
+    def _vstack(datasets: Sequence[DataFrame]) -> DataFrame:
+        """Define how to concat features arrays.
+
+        Args:
+            datasets: Sequence of tables.
+
+        Returns:
+            concatenated table.
+
+        """
+        return pd.concat(datasets, axis=0)
 
     @staticmethod
     def _get_rows(data: DataFrame, k: IntIdx) -> FrameOrSeries:

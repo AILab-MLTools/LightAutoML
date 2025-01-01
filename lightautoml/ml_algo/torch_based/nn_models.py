@@ -8,7 +8,9 @@ from typing import Union
 import numpy as np
 import torch
 import torch.nn as nn
-from ..tabnet.utils import TabNetEncoder, _initialize_non_glu
+
+from .saint.saint_utils import ColTransformer, RowColTransformer
+from .tabnet.utils import TabNetEncoder, _initialize_non_glu
 from .autoint.autoint_utils import AttnInteractionBlock, LeakyGate
 from .autoint.ghost_norm import GhostBatchNorm
 from .fttransformer.fttransformer_utils import Transformer
@@ -1187,3 +1189,129 @@ class TabNet(torch.nn.Module):
     def forward_masks(self, x):
         """Magic forward-pass of encoder that returns masks."""
         return self.encoder.forward_masks(x)
+
+
+class SAINT(nn.Module):
+    """Implementation of Saint from https://github.com/yandex-research/tabular-dl-tabr.
+
+    Args:
+        n_in : int
+            Number of features
+        n_out : int or list of int for multi task classification
+            Dimension of network output
+        embedding_size : embedding_size
+            Dimension of the embedding
+        depth : int
+            Number of Attention Blocks.
+        heads : int
+            Number of heads in Attention.
+        dim_head : int
+            Attention head dimension.
+        mlp_hidden_mults : int | tuple[int]
+            Multiply hidden state of MLP.
+        ffn_mult : int
+            Multiply hidden state of feed forward layer.
+        attn_dropout : float
+            Post-Attention dropout.
+        ff_dropout : int
+            Feed-Forward Dropout.
+        mlp_dropout : float
+            MLP Dropout.
+        attentiontype : str
+            Either "colrow" or "row" : this is the masking attention to use
+        device : torch.device
+        kwargs : kwargs
+    """
+
+    def __init__(
+        self,
+        n_in: int,
+        n_out: int = 1,
+        embedding_size: int = 10,
+        depth: int = 2,
+        heads: int = 8,
+        dim_head=16,
+        mlp_hidden_mults=(4, 2),
+        ffn_mult=4,
+        attn_dropout=0.0,
+        ff_dropout=0.0,
+        mlp_dropout=0.0,
+        attentiontype="colrow",
+        pooling: str = "cls",
+        device: torch.device = torch.device("cuda:0"),
+        **kwargs,
+    ):
+        super().__init__()
+        self.device = device
+        self.cls_token = nn.Embedding(2, embedding_size)
+        self.attentiontype = attentiontype
+        if attentiontype == "col":
+            self.transformer = ColTransformer(
+                dim=embedding_size,
+                depth=depth,
+                heads=heads,
+                dim_head=dim_head,
+                attn_dropout=attn_dropout,
+                ff_dropout=ff_dropout,
+            )
+        elif attentiontype in ["row", "colrow"]:
+            self.transformer = RowColTransformer(
+                dim=embedding_size,
+                nfeats=n_in + 1,  # num featurs
+                depth=depth,
+                heads=heads,
+                dim_head=dim_head,
+                ffn_mult=ffn_mult,
+                attn_dropout=attn_dropout,
+                ff_dropout=ff_dropout,
+                style=attentiontype,
+            )
+
+        l_rate = (n_in + 1) // 8  # input_size = (dim * self.num_categories)  + (dim * num_continuous)
+        hidden_dimensions = list(map(lambda t: l_rate * t, mlp_hidden_mults))
+        self.pooling = pooling_by_name[pooling]()
+        self.mlp = MLP(
+            n_in=embedding_size * 2 if pooling == "concat" else embedding_size,
+            n_out=n_out,
+            hidden_size=hidden_dimensions,
+            drop_rate=mlp_dropout,
+            use_bn=False,
+            dropout_first=False,
+        )
+
+    def forward(self, embedded: torch.Tensor, bs: int) -> torch.Tensor:
+        """Transform the input tensor.
+
+        Args:
+            embedded : torch.Tensor
+                embedded fields
+            bs : batch size without sapler`s part
+
+        Returns:
+            torch.Tensor
+
+        """
+        mask = torch.zeros((len(embedded), len(embedded)), device=self.device, dtype=torch.bool)
+        mask[torch.arange(bs), torch.arange(bs)] = 1
+        # NOTE that it was:
+        # mask[:bs, bs:] = 1
+        # mask[bs:, bs:] = 1
+        # probably misprint
+        mask[:bs, bs:] = 1
+        mask[bs:, :bs] = 1
+
+        cls_token = torch.unsqueeze(
+            self.cls_token(torch.ones(embedded.shape[0], dtype=torch.int).to(self.device)), dim=1
+        )
+        x = torch.cat((cls_token, embedded), dim=1)
+        x = self.transformer(x, mask_samples=mask)
+
+        # NOTE modified to simple X -> Y supervised model
+
+        # cat_outs = self.mlp1(x[:,:self.num_categories,:])
+        # con_outs = self.mlp2(x[:,self.num_categories:,:])
+        # return cat_outs, con_outs
+        x_mask = torch.ones(x.shape, dtype=torch.bool).to(self.device)
+        pool_tokens = self.pooling(x=x, x_mask=x_mask)
+        logits = self.mlp(pool_tokens)
+        return logits

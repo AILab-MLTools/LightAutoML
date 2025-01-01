@@ -237,6 +237,28 @@ class SnapshotEns:
         return self
 
 
+class InfIterator(object):
+    """Infinite Iterator.
+
+    Args:
+        dataloader : torch.utils.dataloader
+    """
+
+    def __init__(self, dataloader):
+        self.dl = dataloader
+        self.it = iter(self.dl)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            return next(self.it)
+        except StopIteration:
+            self.it = iter(self.dl)
+            return next(self.it)
+
+
 class Trainer:
     """Torch main trainer class.
 
@@ -436,7 +458,8 @@ class Trainer:
             train_loss = self.train(dataloaders=dataloaders)
             train_log.extend(train_loss)
             # test
-            val_loss, val_data, weights = self.test(dataloader=dataloaders["val"])
+
+            val_loss, val_data, weights = self.test(dataloaders=dataloaders)
             if self.stop_by_metric:
                 cond = -1 * self.metric(*val_data, weights)
             else:
@@ -461,14 +484,14 @@ class Trainer:
         self.se.set_best_params(self.model)
 
         if self.is_snap:
-            val_loss, val_data, weights = self.test(dataloader=dataloaders["val"], snap=True, stage="val")
+            val_loss, val_data, weights = self.test(dataloaders=dataloaders, snap=True, stage="val")
             logger.info3(
                 "Result SE, val loss: {vl}, val metric: {me}".format(
                     me=self.metric(*val_data, weights), vl=np.mean(val_loss)
                 )
             )
         elif self.se.swa:
-            val_loss, val_data, weights = self.test(dataloader=dataloaders["val"])
+            val_loss, val_data, weights = self.test(dataloaders=dataloaders)
             logger.info3(
                 "Early stopping: val loss: {vl}, val metric: {me}".format(
                     me=self.metric(*val_data, weights), vl=np.mean(val_loss)
@@ -489,6 +512,7 @@ class Trainer:
             Loss.
 
         """
+        ##################
         loss_log = []
         self.model.train()
         running_loss = 0
@@ -499,13 +523,20 @@ class Trainer:
             loader = tqdm(dataloaders["train"], desc="train", disable=False)
         else:
             loader = dataloaders["train"]
-
+        sampler = None
+        if dataloaders["sampler"] is not None:
+            # data['batch_size'] = len(sample['label'])
+            sampler = InfIterator(dataloaders["sampler"])
         for sample in loader:
             data = {
                 i: (sample[i].long().to(self.device) if _dtypes_mapping[i] == "long" else sample[i].to(self.device))
                 for i in sample.keys()
             }
-
+            # data['batch_size'] = len(sample['label'])
+            # if dataloaders['sampler'] is not None:
+            #     # data['batch_size'] = len(sample['label'])
+            #     data['sampler'] = dataloaders['sampler']
+            data["sampler"] = sampler
             loss = self.model(data).mean()
             if self.apex:
                 with self.amp.scale_loss(loss, self.optimizer) as scaled_loss:
@@ -525,7 +556,7 @@ class Trainer:
             c += 1
             if self.verbose and self.verbose_bar and logging_level < logging.INFO:
                 if self.verbose_inside and c % self.verbose_inside == 0:
-                    val_loss, val_data, weights = self.test(dataloader=dataloaders["val"])
+                    val_loss, val_data, weights = self.test(dataloaders=dataloaders)
                     if self.stop_by_metric:
                         cond = -1 * self.metric(*val_data, weights)
                     else:
@@ -545,12 +576,12 @@ class Trainer:
         return loss_log
 
     def test(
-        self, dataloader: DataLoader, stage: str = "val", snap: bool = False
+        self, dataloaders: DataLoader, stage: str = "val", snap: bool = False
     ) -> Tuple[List[float], Tuple[np.ndarray, np.ndarray]]:
         """Testing loop.
 
         Args:
-            dataloader: Torch dataloader.
+            dataloaders: Torch dataloader.
             stage: Train, val or test.
             snap: Use snapshots.
 
@@ -558,6 +589,7 @@ class Trainer:
             Loss, (Target, OOF).
 
         """
+        #####################
         loss_log = []
         weights_log = []
         self.model.eval()
@@ -565,17 +597,21 @@ class Trainer:
         target = []
         logging_level = get_stdout_level()
         if logging_level < logging.INFO and self.verbose and self.verbose_bar:
-            loader = tqdm(dataloader, desc=stage, disable=False)
+            loader = tqdm(dataloaders[stage], desc=stage, disable=False)
         else:
-            loader = dataloader
-
+            loader = dataloaders[stage]
+        sampler = None
+        if dataloaders["sampler"] is not None:
+            # data['batch_size'] = len(sample['label'])
+            sampler = InfIterator(dataloaders["sampler"])
         with torch.no_grad():
             for sample in loader:
                 data = {
-                    i: (sample[i].long().to(self.device) if _dtypes_mapping[i] == "long" else sample[i].to(self.device))
+                    i: sample[i].long().to(self.device) if _dtypes_mapping[i] == "long" else sample[i].to(self.device)
                     for i in sample.keys()
                 }
-
+                data["sampler"] = sampler
+                # NOTE, HERE WE CAN ADD TORCH.UNIQUE
                 if snap:
                     output = self.se.predict(data)
                     loss = self.se.forward(data) if stage != "test" else None
@@ -588,11 +624,11 @@ class Trainer:
 
                 loss_log.append(loss)
 
-                output = output.data.cpu().numpy()
-                target_data = data["label"].data.cpu().numpy()
+                output = output.data.cpu().numpy()[: len(sample["label"])]
+                target_data = data["label"].data.cpu().numpy()[: len(sample["label"])]
                 weights = data.get("weight", None)
                 if weights is not None:
-                    weights = weights.data.cpu().numpy()
+                    weights = weights.data.cpu().numpy()[: len(sample["label"])]
 
                 pred.append(output)
                 target.append(target_data)
@@ -609,16 +645,16 @@ class Trainer:
             np.array(weights_log),
         )
 
-    def predict(self, dataloader: DataLoader, stage: str) -> np.ndarray:
+    def predict(self, dataloaders: DataLoader, stage: str) -> np.ndarray:
         """Predict model.
 
         Args:
-            dataloader: Torch dataloader.
+            dataloaders: Torch dataloader.
             stage: Train, val or test.
 
         Returns:
             Prediction.
 
         """
-        loss, (target, pred), _ = self.test(stage=stage, snap=self.is_snap, dataloader=dataloader)
+        loss, (target, pred), _ = self.test(stage=stage, snap=self.is_snap, dataloaders=dataloaders)
         return pred

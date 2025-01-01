@@ -625,6 +625,7 @@ class TabularAutoML(AutoMLPreset):
                 "autoint",
                 "tabnet",
                 "fttransformer",
+                "saint",
             ]
             available_nn_models = available_nn_models + [x + "_tuned" for x in available_nn_models]
             nn_models = [

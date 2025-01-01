@@ -16,7 +16,7 @@ from typing import cast
 
 import numpy as np
 
-from lightautoml.validation.base import TrainValidIterator
+from lightautoml.validation.base import HoldoutIterator, TrainValidIterator
 
 from ..dataset.base import LAMLDataset
 from ..dataset.np_pd_dataset import CSRSparseDataset
@@ -271,8 +271,8 @@ class TabularMLAlgo(MLAlgo):
                     "===== Start working with \x1b[1mfold {}\x1b[0m for \x1b[1m{}\x1b[0m =====".format(n, self._name)
                 )
             self.timer.set_control_point()
-
-            model, pred = self.fit_predict_single_fold(train, valid)
+            self.params['is_holdout'] = isinstance(train_valid_iterator,HoldoutIterator)
+            model, pred = self.fit_predict_single_fold(train, valid, 0)
             self.models.append(model)
             preds_arr[idx] += pred.reshape((pred.shape[0], -1))
             counter_arr[idx] += 1

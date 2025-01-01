@@ -2,8 +2,8 @@
 import torch
 import numpy as np
 import torch.nn as nn
-from ..torch_based.node_nn_model import Entmax15, Sparsemax
-from ..torch_based.autoint.ghost_norm import GhostBatchNorm
+from ..node_nn_model import Entmax15, Sparsemax
+from ..autoint.ghost_norm import GhostBatchNorm
 
 
 def _initialize_non_glu(module, input_dim, output_dim):

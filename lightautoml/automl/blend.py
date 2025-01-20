@@ -185,7 +185,7 @@ class BestModelSelector(Blender):
             Single prediction dataset and Sequence of pruned pipelines.
 
         """
-        self._set_metadata(predictions, pipes)
+        self._set_metadata(predictions, pipes, class_mapping)
         splitted_preds, model_idx, pipe_idx = self.split_models(predictions)
 
         best_pred = None
